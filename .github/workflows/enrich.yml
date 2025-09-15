@@ -48,7 +48,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AI_BATCH: '60'
+          AI_BATCH: '200'
           AI_MAX_CHARS: '8000'
           EMBED_MODEL: 'text-embedding-3-small'
         run: |
