@@ -1,13 +1,9 @@
 import os
 import base64
 import time
-import json
-from datetime import datetime, timezone
 from typing import Dict, Any, List
 import requests
 from dotenv import load_dotenv
-
-# Supabase client (v2)
 from supabase import create_client, Client
 
 load_dotenv()
@@ -17,7 +13,6 @@ GORGIAS_API_KEY = os.getenv("GORGIAS_API_KEY")
 GORGIAS_SUBDOMAIN = os.getenv("GORGIAS_SUBDOMAIN", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 
 assert GORGIAS_EMAIL and GORGIAS_API_KEY and GORGIAS_SUBDOMAIN, "Set Gorgias env vars."
 assert SUPABASE_URL and SUPABASE_ANON_KEY, "Set Supabase env vars."
@@ -26,10 +21,7 @@ sb: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 def auth_header(email: str, key: str) -> Dict[str, str]:
     token = base64.b64encode(f"{email}:{key}".encode()).decode()
-    return {
-        "Authorization": f"Basic {token}",
-        "accept": "application/json",
-    }
+    return {"Authorization": f"Basic {token}", "accept": "application/json"}
 
 def gorgias_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     base = f"https://{GORGIAS_SUBDOMAIN}.gorgias.com"
@@ -38,19 +30,27 @@ def gorgias_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     r.raise_for_status()
     return r.json()
 
-def upsert_tickets(rows: List[Dict[str, Any]]) -> None:
-    if not rows:
-        return
-    # Upsert on primary key 'id'
-    sb.table("raw_gorgias").upsert(rows, on_conflict="id").execute()
-
-def slack_post(text: str):
-    if not SLACK_WEBHOOK_URL:
-        return
-    try:
-        requests.post(SLACK_WEBHOOK_URL, json={"text": text}, timeout=10)
-    except Exception:
-        pass
+# ---------- FILTERS (client-side) ----------
+def keep_ticket(t: Dict[str, Any]) -> bool:
+    """Return True only for real, useful tickets."""
+    # 1) drop spam
+    if t.get("spam"):
+        return False
+    # 2) drop trashed/soft-deleted
+    if t.get("trashed_datetime"):
+        return False
+    # 3) require a customer email
+    cust = t.get("customer") or {}
+    email = (cust.get("email") or "").strip()
+    if not email:
+        return False
+    # 4) require some content (subject OR excerpt OR messages_count>0)
+    subject = (t.get("subject") or "").strip()
+    excerpt = (t.get("excerpt") or "").strip()
+    if not subject and not excerpt and not (t.get("messages_count") or 0) > 0:
+        return False
+    return True
+# -------------------------------------------
 
 def normalize_ticket(t: Dict[str, Any]) -> Dict[str, Any]:
     cust = t.get("customer") or {}
@@ -70,6 +70,10 @@ def normalize_ticket(t: Dict[str, Any]) -> Dict[str, Any]:
         "raw": t,
     }
 
+def upsert_tickets(rows: List[Dict[str, Any]]) -> None:
+    if rows:
+        sb.table("raw_gorgias").upsert(rows, on_conflict="id").execute()
+
 def fetch_latest_batch(limit: int = 100, cursor: str = None) -> Dict[str, Any]:
     params = {"limit": limit, "order_by": "created_datetime:desc"}
     if cursor:
@@ -77,21 +81,28 @@ def fetch_latest_batch(limit: int = 100, cursor: str = None) -> Dict[str, Any]:
     return gorgias_get("/api/tickets", params)
 
 def run():
-    total = 0
+    total_seen = 0
+    total_kept = 0
     cursor = None
-    max_pages = 5  # safety guard for first run
+    max_pages = 5
     for _ in range(max_pages):
         payload = fetch_latest_batch(limit=100, cursor=cursor)
         data = payload.get("data", [])
-        meta = payload.get("meta", {})
-        rows = [normalize_ticket(t) for t in data]
+        meta = payload.get("meta", {}) or {}
+        total_seen += len(data)
+
+        filtered = [t for t in data if keep_ticket(t)]
+        rows = [normalize_ticket(t) for t in filtered]
         upsert_tickets(rows)
-        total += len(rows)
+        total_kept += len(rows)
+
         cursor = meta.get("next_cursor")
-        if not cursor or len(data) == 0:
+        if not cursor or not data:
             break
-        time.sleep(0.5)  # be nice to the API
-    slack_post(f"✅ Gorgias ingest complete: {total} tickets upserted.")
+        time.sleep(0.4)
+
+    print(f"✅ Ingest finished: kept {total_kept} / {total_seen} tickets after client-side filters.")
 
 if __name__ == "__main__":
     run()
+
