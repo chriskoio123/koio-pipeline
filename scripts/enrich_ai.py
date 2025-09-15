@@ -37,10 +37,12 @@ Respond as compact JSON with keys: issue_label, sentiment, priority, summary. Do
 """
 
 def fetch_batch() -> List[Dict[str, Any]]:
+    # NOTE: supabase-py .is_(col, val) takes TWO args.
+    # For NOT NULL use: .not_.is_(col, "null")
     q = (
         sb.table("raw_gorgias")
         .select("id, subject, message_for_ai, ai_updated_at")
-        .is_("message_for_ai", "not", None)
+        .not_.is_("message_for_ai", "null")
         .order("updated_datetime", desc=True)
         .limit(BATCH)
         .execute()
