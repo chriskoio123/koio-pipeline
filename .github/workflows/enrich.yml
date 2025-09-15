@@ -1,28 +1,25 @@
 name: AI Enrichment (labels + embeddings)
 
 on:
-  schedule:
-    - cron: "0 10 * * *"   # daily at 10:00 UTC
+  schedule: [{ cron: "0 10 * * *" }]
   workflow_dispatch: {}
 
 jobs:
   enrich:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt openai
+          pip install -r requirements.txt
+          pip install openai==1.* supabase==2.* python-dotenv==1.*
 
-      # Debug guard: confirm the secret is actually injected by Actions
       - name: Verify OPENAI_API_KEY present
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -37,14 +34,10 @@ PY
 
       - name: Run enrichment
         env:
-          # Required for Supabase
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-
-          # Tunables
           AI_BATCH: "60"
           AI_MAX_CHARS: "8000"
-          EMBED_MODEL: "text-embedding-3-small"   # 1536-d
+          EMBED_MODEL: "text-embedding-3-small"
         run: |
-          # Inline inject OPENAI_API_KEY to the python process as well
           OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" python scripts/enrich_ai.py
