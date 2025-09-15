@@ -1,16 +1,20 @@
 name: AI Enrichment (labels + embeddings)
 
 on:
-  schedule: [{ cron: "0 10 * * *" }]
-  workflow_dispatch: {}
+  schedule:
+    - cron: "0 10 * * *"   # daily at 10:00 UTC
+  workflow_dispatch:
 
 jobs:
   enrich:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -18,17 +22,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install openai==1.* supabase==2.* python-dotenv==1.*
+          pip install "openai>=1.0.0" "supabase>=2.4.0" "python-dotenv>=1.0.0"
 
       - name: Verify OPENAI_API_KEY present
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python - << 'PY'
+          python - <<'PY'
 import os, sys
 val = os.getenv("OPENAI_API_KEY")
 print("OPENAI_API_KEY set? ", bool(val))
-print("Length: ", (len(val) if val else 0))
+print("Length: ", len(val) if val else 0)
 sys.exit(0 if val else 1)
 PY
 
