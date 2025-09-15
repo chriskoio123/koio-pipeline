@@ -2,157 +2,37 @@ name: Nightly Ingest (Gorgias → Supabase)
 
 on:
   schedule:
-    - cron: "0 9 * * *"  # 09:00 UTC daily
-  workflow_dispatch: {}
-import os
-import base64
-import time
-from typing import Dict, Any, List
+    - cron: "0 9 * * *"  # runs daily at 09:00 UTC
+  workflow_dispatch: {}   # allow manual runs from the Actions tab
 
-import requests
-from dotenv import load_dotenv
-from supabase import create_client, Client
+concurrency:
+  group: ingest-gorgias
+  cancel-in-progress: false
 
-load_dotenv()
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
 
-# --- Required env vars ---
-GORGIAS_EMAIL = os.getenv("GORGIAS_EMAIL")
-GORGIAS_API_KEY = os.getenv("GORGIAS_API_KEY")
-GORGIAS_SUBDOMAIN = os.getenv("GORGIAS_SUBDOMAIN", "").strip()
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-assert GORGIAS_EMAIL and GORGIAS_API_KEY and GORGIAS_SUBDOMAIN, "Set Gorgias env vars."
-assert SUPABASE_URL and SUPABASE_ANON_KEY, "Set Supabase env vars."
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-# --- Optional tuning ---
-MAX_PAGES = int(os.getenv("MAX_PAGES", "5"))        # safety guard for the run
-PAGE_LIMIT = int(os.getenv("PAGE_LIMIT", "100"))    # Gorgias limit per page
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-# --- Subject contains blocklist (case-insensitive) ---
-# Add phrases you want to exclude anywhere in the subject.
-SUBJECT_BLOCKLIST_CONTAINS = [
-    "report domain:",      # your request
-    # "out of office",
-    # "auto-reply",
-    # "dmca",
-]
-
-# --- Init Supabase ---
-sb: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-
-def _auth_header(email: str, key: str) -> Dict[str, str]:
-    token = base64.b64encode(f"{email}:{key}".encode()).decode()
-    return {"Authorization": f"Basic {token}", "accept": "application/json"}
-
-def gorgias_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    base = f"https://{GORGIAS_SUBDOMAIN}.gorgias.com"
-    url = f"{base}{path}"
-    r = requests.get(url, headers=_auth_header(GORGIAS_EMAIL, GORGIAS_API_KEY), params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-# ----------------------- FILTERS -----------------------
-def _subject_blocklisted(subject: str) -> bool:
-    subj = (subject or "").lower()
-    if not subj:
-        return False
-    for needle in SUBJECT_BLOCKLIST_CONTAINS:
-        if needle and needle.lower() in subj:
-            return True
-    return False
-
-def keep_ticket(t: Dict[str, Any]) -> bool:
-    """
-    Return True only for real, useful tickets.
-    Rules:
-      - not spam
-      - not trashed
-      - has a customer email
-      - has some content (subject OR excerpt OR messages_count > 0)
-      - subject does NOT contain any blocklisted phrase (case-insensitive)
-    """
-    # 1) spam
-    if t.get("spam"):
-        return False
-
-    # 2) trashed/soft-deleted
-    if t.get("trashed_datetime"):
-        return False
-
-    # 3) must have a customer email
-    cust = t.get("customer") or {}
-    email = (cust.get("email") or "").strip()
-    if not email:
-        return False
-
-    # 4) blocklist by subject (contains)
-    subject = (t.get("subject") or "").strip()
-    if _subject_blocklisted(subject):
-        return False
-
-    # 5) require some content
-    excerpt = (t.get("excerpt") or "").strip()
-    if not subject and not excerpt and not (t.get("messages_count") or 0) > 0:
-        return False
-
-    return True
-# -------------------------------------------------------
-
-def normalize_ticket(t: Dict[str, Any]) -> Dict[str, Any]:
-    cust = t.get("customer") or {}
-    tags = t.get("tags") or []
-    return {
-        "id": t.get("id"),
-        "status": t.get("status"),
-        "channel": t.get("channel"),
-        "via": t.get("via"),
-        "subject": t.get("subject"),
-        "customer_email": cust.get("email"),
-        "customer_name": cust.get("name"),
-        "created_datetime": t.get("created_datetime"),
-        "updated_datetime": t.get("updated_datetime"),
-        "last_message_datetime": t.get("last_message_datetime"),
-        "tags": tags,
-        "raw": t,  # full payload for future use
-    }
-
-def upsert_tickets(rows: List[Dict[str, Any]]) -> None:
-    if rows:
-        # Upsert on primary key 'id'
-        sb.table("raw_gorgias").upsert(rows, on_conflict="id").execute()
-
-def fetch_latest_batch(limit: int = PAGE_LIMIT, cursor: str = None) -> Dict[str, Any]:
-    params = {"limit": limit, "order_by": "created_datetime:desc"}
-    if cursor:
-        params["cursor"] = cursor
-    return gorgias_get("/api/tickets", params)
-
-def run():
-    total_seen = 0
-    total_kept = 0
-    cursor = None
-
-    for _ in range(MAX_PAGES):
-        payload = fetch_latest_batch(limit=PAGE_LIMIT, cursor=cursor)
-        data = payload.get("data", []) or []
-        meta = payload.get("meta", {}) or {}
-
-        total_seen += len(data)
-
-        # apply filters
-        filtered = [t for t in data if keep_ticket(t)]
-        rows = [normalize_ticket(t) for t in filtered]
-        upsert_tickets(rows)
-        total_kept += len(rows)
-
-        cursor = meta.get("next_cursor")
-        if not cursor or not data:
-            break
-
-        time.sleep(0.4)  # be nice to the API
-
-    print(f"✅ Ingest finished: kept {total_kept} / {total_seen} tickets (client-side filters incl. subject contains blocklist).")
-
-if __name__ == "__main__":
-    run()
+      - name: Run ingest script
+        env:
+          GORGIAS_EMAIL: ${{ secrets.GORGIAS_EMAIL }}
+          GORGIAS_API_KEY: ${{ secrets.GORGIAS_API_KEY }}
+          GORGIAS_SUBDOMAIN: ${{ secrets.GORGIAS_SUBDOMAIN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          python scripts/gorgias_ingest.py
