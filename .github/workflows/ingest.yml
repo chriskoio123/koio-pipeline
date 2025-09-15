@@ -29,10 +29,21 @@ jobs:
 
       - name: Run ingest script
         env:
+          # --- Required secrets ---
           GORGIAS_EMAIL: ${{ secrets.GORGIAS_EMAIL }}
           GORGIAS_API_KEY: ${{ secrets.GORGIAS_API_KEY }}
           GORGIAS_SUBDOMAIN: ${{ secrets.GORGIAS_SUBDOMAIN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+          # --- Tunable ENV VARS ---
+          # Ticket paging window (rolling refresh)
+          MAX_PAGES: "5"             # how many ticket pages per run
+          PAGE_LIMIT: "100"          # tickets per page
+
+          # Message fetching (to avoid 429s)
+          MAX_MESSAGE_FETCH_PER_RUN: "100"  # cap how many tickets get messages each run
+          MSG_LIMIT: "50"                   # messages per ticket API call
+          MSG_SLEEP: "0.20"                 # seconds between message calls (helps avoid 429s)
         run: |
           python scripts/gorgias_ingest.py
