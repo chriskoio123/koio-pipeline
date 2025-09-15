@@ -24,24 +24,24 @@ jobs:
           pip install -r requirements.txt
           pip install "openai>=1.0.0" "supabase>=2.4.0" "python-dotenv>=1.0.0"
 
+      # Simple, YAML-safe secret check (no heredoc)
       - name: Verify OPENAI_API_KEY present
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python - <<'PY'
-import os, sys
-val = os.getenv("OPENAI_API_KEY")
-print("OPENAI_API_KEY set? ", bool(val))
-print("Length: ", len(val) if val else 0)
-sys.exit(0 if val else 1)
-PY
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY is missing"; exit 1;
+          else
+            echo "OPENAI_API_KEY set (length: ${#OPENAI_API_KEY})";
+          fi
 
       - name: Run enrichment
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AI_BATCH: "60"
           AI_MAX_CHARS: "8000"
           EMBED_MODEL: "text-embedding-3-small"
         run: |
-          OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" python scripts/enrich_ai.py
+          python scripts/enrich_ai.py
