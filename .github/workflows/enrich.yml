@@ -1,14 +1,13 @@
 name: AI Enrichment (labels + embeddings)
 
 on:
-  schedule:
-    - cron: "0 10 * * *"   # daily at 10:00 UTC
   workflow_dispatch:
+  schedule:
+    - cron: '0 10 * * *'
 
 jobs:
   enrich:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install deps
         run: |
@@ -24,57 +23,33 @@ jobs:
           pip install -r requirements.txt
           pip install "openai>=1.0.0" "supabase>=2.4.0" "python-dotenv>=1.0.0"
 
-      # Sanity checks (keeps things simple + surfaces exact failures)
       - name: Verify secrets present
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          test -n "$OPENAI_API_KEY" || (echo "OPENAI_API_KEY missing" && exit 1)
-          test -n "$SUPABASE_URL" || (echo "SUPABASE_URL missing" && exit 1)
-          test -n "$SUPABASE_SERVICE_ROLE_KEY" || (echo "SUPABASE_SERVICE_ROLE_KEY missing" && exit 1)
+          if [ -z "$OPENAI_API_KEY" ]; then echo "OPENAI_API_KEY missing"; exit 1; fi
+          if [ -z "$SUPABASE_URL" ]; then echo "SUPABASE_URL missing"; exit 1; fi
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then echo "SUPABASE_SERVICE_ROLE_KEY missing"; exit 1; fi
           echo "Secrets OK"
 
-      # Lightweight diag to print explicit failures (no DB writes)
-      - name: Diagnostics (OpenAI + Supabase connectivity)
+      - name: Diagnostics (OpenAI + Supabase)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          python - <<'PY'
-import os, traceback
-print("== Diagnostics ==")
-try:
-    from openai import OpenAI
-    c = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    r = c.embeddings.create(model="text-embedding-3-small", input="ping")
-    print("OpenAI OK, dim:", len(r.data[0].embedding))
-except Exception as e:
-    print("OpenAI ERROR:", e); traceback.print_exc(); raise
-
-try:
-    from supabase import create_client
-    url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-    sb = create_client(url, key)
-    # read-only probe (no writes)
-    data = sb.table("raw_gorgias").select("id").limit(1).execute()
-    print("Supabase OK, rows:", len(data.data or []))
-except Exception as e:
-    print("Supabase ERROR:", e); traceback.print_exc(); raise
-print("== Diagnostics complete ==")
-PY
+          python -c "import os; from openai import OpenAI; c=OpenAI(api_key=os.environ['OPENAI_API_KEY']); e=c.embeddings.create(model='text-embedding-3-small', input='ping'); print('OpenAI OK, dim:', len(e.data[0].embedding))"
+          python -c "import os; from supabase import create_client; sb=create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_ROLE_KEY']); r=sb.table('raw_gorgias').select('id').limit(1).execute(); print('Supabase OK, rows:', len(r.data or []))"
 
       - name: Run enrichment
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AI_BATCH: "60"
-          AI_MAX_CHARS: "8000"
-          EMBED_MODEL: "text-embedding-3-small"
-          PYTHONUNBUFFERED: "1"
+          AI_BATCH: '60'
+          AI_MAX_CHARS: '8000'
+          EMBED_MODEL: 'text-embedding-3-small'
         run: |
           python scripts/enrich_ai.py
