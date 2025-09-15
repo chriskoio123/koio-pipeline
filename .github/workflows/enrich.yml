@@ -22,15 +22,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt openai
 
+      # Debug guard: confirm the secret is actually injected by Actions
+      - name: Verify OPENAI_API_KEY present
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python - << 'PY'
+import os, sys
+val = os.getenv("OPENAI_API_KEY")
+print("OPENAI_API_KEY set? ", bool(val))
+print("Length: ", (len(val) if val else 0))
+sys.exit(0 if val else 1)
+PY
+
       - name: Run enrichment
         env:
+          # Required for Supabase
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
           # Tunables
           AI_BATCH: "60"
           AI_MAX_CHARS: "8000"
           EMBED_MODEL: "text-embedding-3-small"   # 1536-d
         run: |
-          python scripts/enrich_ai.py
+          # Inline inject OPENAI_API_KEY to the python process as well
+          OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" python scripts/enrich_ai.py
