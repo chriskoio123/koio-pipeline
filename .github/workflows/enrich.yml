@@ -24,24 +24,57 @@ jobs:
           pip install -r requirements.txt
           pip install "openai>=1.0.0" "supabase>=2.4.0" "python-dotenv>=1.0.0"
 
-      # Simple, YAML-safe secret check (no heredoc)
-      - name: Verify OPENAI_API_KEY present
+      # Sanity checks (keeps things simple + surfaces exact failures)
+      - name: Verify secrets present
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          if [ -z "$OPENAI_API_KEY" ]; then
-            echo "OPENAI_API_KEY is missing"; exit 1;
-          else
-            echo "OPENAI_API_KEY set (length: ${#OPENAI_API_KEY})";
-          fi
+          test -n "$OPENAI_API_KEY" || (echo "OPENAI_API_KEY missing" && exit 1)
+          test -n "$SUPABASE_URL" || (echo "SUPABASE_URL missing" && exit 1)
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || (echo "SUPABASE_SERVICE_ROLE_KEY missing" && exit 1)
+          echo "Secrets OK"
+
+      # Lightweight diag to print explicit failures (no DB writes)
+      - name: Diagnostics (OpenAI + Supabase connectivity)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python - <<'PY'
+import os, traceback
+print("== Diagnostics ==")
+try:
+    from openai import OpenAI
+    c = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    r = c.embeddings.create(model="text-embedding-3-small", input="ping")
+    print("OpenAI OK, dim:", len(r.data[0].embedding))
+except Exception as e:
+    print("OpenAI ERROR:", e); traceback.print_exc(); raise
+
+try:
+    from supabase import create_client
+    url = os.environ["SUPABASE_URL"]
+    key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    sb = create_client(url, key)
+    # read-only probe (no writes)
+    data = sb.table("raw_gorgias").select("id").limit(1).execute()
+    print("Supabase OK, rows:", len(data.data or []))
+except Exception as e:
+    print("Supabase ERROR:", e); traceback.print_exc(); raise
+print("== Diagnostics complete ==")
+PY
 
       - name: Run enrichment
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AI_BATCH: "60"
           AI_MAX_CHARS: "8000"
           EMBED_MODEL: "text-embedding-3-small"
+          PYTHONUNBUFFERED: "1"
         run: |
           python scripts/enrich_ai.py
