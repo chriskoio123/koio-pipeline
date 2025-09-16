@@ -1,0 +1,146 @@
+name: Cluster Analysis (AI-powered ticket grouping)
+
+on:
+  workflow_dispatch: {}   # Manual trigger from Actions tab
+  schedule:
+    - cron: "0 11 * * *"  # Daily at 11:00 UTC (after enrichment at 10:00)
+
+concurrency:
+  group: cluster-analysis
+  cancel-in-progress: false
+
+jobs:
+  cluster:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify clustering dependencies
+        run: |
+          python -c "import numpy, sklearn, hdbscan; print('✅ Clustering dependencies OK')"
+          python -c "import openai; print('✅ OpenAI client OK')"
+          python -c "from supabase import create_client; print('✅ Supabase client OK')"
+
+      - name: Verify secrets present
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then echo "❌ OPENAI_API_KEY missing"; exit 1; fi
+          if [ -z "$SUPABASE_URL" ]; then echo "❌ SUPABASE_URL missing"; exit 1; fi
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ] && [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "❌ Need SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY"; exit 1;
+          fi
+          echo "✅ Required secrets present"
+
+      - name: Test database connectivity
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          python -c "
+          import os
+          from supabase import create_client
+
+          url = os.environ['SUPABASE_URL']
+          key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_ANON_KEY')
+
+          sb = create_client(url, key)
+
+          # Test basic connectivity
+          result = sb.table('raw_gorgias').select('id').limit(1).execute()
+          print(f'✅ Database connection OK - found {len(result.data or [])} sample records')
+
+          # Check for enriched tickets
+          enriched = sb.table('raw_gorgias').select('id', count='exact').not_.is_('embedding', 'null').execute()
+          print(f'✅ Found {enriched.count or 0} tickets with embeddings ready for clustering')
+
+          # Check clustering tables exist
+          clusters = sb.table('ticket_clusters').select('id').limit(1).execute()
+          print('✅ Clustering tables accessible')
+          "
+
+      - name: Run clustering analysis
+        env:
+          # Required secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+          # Clustering configuration
+          CLUSTER_ANALYSIS_DAYS: "30"           # Analyze last 30 days
+          MIN_CLUSTER_SIZE: "3"                 # Minimum 3 tickets per cluster
+          MAX_CLUSTERS: "15"                    # Max 15 clusters for readability
+          MIN_NEW_TICKETS_FOR_RERUN: "10"       # Only re-run if 10+ new tickets
+
+          # HDBSCAN tuning
+          HDBSCAN_MIN_SAMPLES: "2"              # HDBSCAN min_samples parameter
+          CLUSTER_SELECTION_EPSILON: "0.1"      # HDBSCAN cluster_selection_epsilon
+
+          # AI configuration
+          CLUSTER_GPT_MODEL: "gpt-4o-mini"      # Cost-effective model for summaries
+          MAX_SUMMARY_TOKENS: "300"             # Token limit per cluster summary
+          CLUSTER_BATCH_SIZE: "50"              # Batch size for processing
+
+        run: |
+          echo "🔬 Starting clustering analysis..."
+          python scripts/cluster_analysis.py
+
+      - name: Display clustering summary
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          python -c "
+          import os
+          from supabase import create_client
+          from datetime import datetime, timedelta
+
+          url = os.environ['SUPABASE_URL']
+          key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_ANON_KEY')
+          sb = create_client(url, key)
+
+          # Get latest clustering results
+          recent_clusters = sb.table('ticket_clusters').select('*').order('created_at', desc=True).limit(20).execute()
+
+          if recent_clusters.data:
+              print('📊 CLUSTERING RESULTS:')
+              print('=' * 50)
+
+              latest_run = recent_clusters.data[0]['created_at']
+              print(f'Latest analysis: {latest_run}')
+              print()
+
+              # Group by analysis run (same created_at)
+              latest_clusters = [c for c in recent_clusters.data if c['created_at'] == latest_run]
+
+              for cluster in sorted(latest_clusters, key=lambda x: x['ticket_count'], reverse=True):
+                  print(f\"🎯 {cluster['theme_name']} (Cluster {cluster['cluster_id']})\")
+                  print(f\"   📈 {cluster['ticket_count']} tickets | Severity: {cluster['severity']}/5\")
+                  print(f\"   😊 Sentiment: {cluster['sentiment_trend']} ({cluster['avg_sentiment']:.2f})\")
+                  print(f\"   💡 {cluster['summary']}\")
+                  if cluster['action_items']:
+                      print(f\"   🎯 Action: {cluster['action_items']}\")
+                  print()
+
+              print(f'Total clusters found: {len(latest_clusters)}')
+          else:
+              print('No clustering results found - check logs above for issues.')
+          "
