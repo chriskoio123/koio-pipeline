@@ -59,12 +59,27 @@ jobs:
           REPORT_GPT_MODEL: "gpt-4o-mini"   # Cost-effective model for summaries
           MAX_REPORT_TOKENS: "1000"         # Token limit for executive summary
 
-          # Optional integrations
-          SHEETS_EXPORT_ENABLED: "false"    # Enable Google Sheets export
+          # Google Sheets integration
+          GOOGLE_SHEETS_URL: "https://docs.google.com/spreadsheets/d/1hr5JJbV5QbX3TYXVgtXAzwTxj1nveAawm7e4Pl7ztJg/edit?usp=sharing"
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SHEETS_EXPORT_ENABLED: "true"     # Enable Google Sheets export
 
         run: |
           echo "📊 Starting business intelligence report generation..."
           python scripts/generate_business_report.py
+
+      - name: Export to Google Sheets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          GOOGLE_SHEETS_URL: "https://docs.google.com/spreadsheets/d/1hr5JJbV5QbX3TYXVgtXAzwTxj1nveAawm7e4Pl7ztJg/edit?usp=sharing"
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          REPORT_ANALYSIS_DAYS: "30"
+
+        run: |
+          echo "📋 Exporting to Google Sheets..."
+          python scripts/export_to_sheets.py
 
       - name: Upload CSV Reports
         uses: actions/upload-artifact@v4
