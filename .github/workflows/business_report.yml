@@ -1,0 +1,134 @@
+name: Weekly Business Intelligence Report
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"  # Every Monday at 2 PM UTC
+  workflow_dispatch: {}   # Manual trigger
+
+concurrency:
+  group: business-report
+  cancel-in-progress: false
+
+jobs:
+  generate_report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pandas
+
+      - name: Verify secrets present
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then echo "❌ OPENAI_API_KEY missing"; exit 1; fi
+          if [ -z "$SUPABASE_URL" ]; then echo "❌ SUPABASE_URL missing"; exit 1; fi
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ] && [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "❌ Need SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY"; exit 1;
+          fi
+          echo "✅ Required secrets present"
+
+      - name: Generate Business Intelligence Report
+        env:
+          # Required secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+          # Report configuration
+          REPORT_ANALYSIS_DAYS: "30"        # Analyze last 30 days
+          REPORT_COMPARISON_DAYS: "60"      # Compare with previous 30 days (60 total lookback)
+          MIN_TICKETS_FOR_TREND: "5"        # Minimum tickets to identify trends
+
+          # AI configuration
+          REPORT_GPT_MODEL: "gpt-4o-mini"   # Cost-effective model for summaries
+          MAX_REPORT_TOKENS: "1000"         # Token limit for executive summary
+
+          # Optional integrations
+          SHEETS_EXPORT_ENABLED: "false"    # Enable Google Sheets export
+
+        run: |
+          echo "📊 Starting business intelligence report generation..."
+          python scripts/generate_business_report.py
+
+      - name: Upload CSV Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-intelligence-reports
+          path: "*.csv"
+          retention-days: 90
+
+      - name: Create Issue with Report Summary
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          # Generate brief summary for GitHub issue
+          python -c "
+          import os
+          from datetime import datetime, timedelta
+          from supabase import create_client
+
+          url = os.environ['SUPABASE_URL']
+          key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_ANON_KEY')
+          sb = create_client(url, key)
+
+          # Get quick metrics
+          cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+
+          tickets = sb.table('raw_gorgias').select('id, ai_sentiment').gte('created_datetime', cutoff).not_.is_('ai_sentiment', 'null').execute()
+          ticket_count = len(tickets.data or [])
+
+          if ticket_count > 0:
+              sentiments = [t['ai_sentiment'] for t in tickets.data]
+              positive = sentiments.count('positive')
+              negative = sentiments.count('negative')
+              neutral = sentiments.count('neutral')
+
+              clusters = sb.table('ticket_clusters').select('theme_name, ticket_count, severity').order('created_at', desc=True).limit(5).execute()
+              top_themes = [f\"• {c['theme_name']} ({c['ticket_count']} tickets)\" for c in (clusters.data or [])[:3]]
+
+              summary = f\"\"\"## 📊 Weekly Support Intelligence Summary
+          **Period**: {(datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')} to {datetime.now().strftime('%Y-%m-%d')}
+
+          ### Key Metrics
+          - **Total Tickets**: {ticket_count}
+          - **Sentiment**: {positive} positive, {neutral} neutral, {negative} negative
+
+          ### Top Themes
+          {chr(10).join(top_themes) if top_themes else '• No themes available'}
+
+          ### Actions
+          - [View detailed report in workflow logs](${{github.server_url}}/${{github.repository}}/actions/runs/${{github.run_id}})
+          - [Download CSV data from artifacts](${{github.server_url}}/${{github.repository}}/actions/runs/${{github.run_id}})
+
+          *Generated automatically by Business Intelligence pipeline*\"\"\"
+
+              print(summary)
+          else:
+              print('No ticket data available for summary')
+          " > issue_body.txt
+
+          # Create GitHub issue with summary
+          gh issue create \
+            --title \"📊 Weekly Support Intelligence Report - $(date +'%Y-%m-%d')\" \
+            --body-file issue_body.txt \
+            --label \"business-intelligence,automated\" || echo \"Issue creation failed\"
