@@ -301,7 +301,24 @@ Respond as JSON with keys: theme_name, summary, severity, action_items"""
                         temperature=0.3
                     )
 
-                    summary_data = json.loads(response.choices[0].message.content.strip())
+                    response_content = response.choices[0].message.content.strip()
+                    logger.info(f"GPT response for cluster {cluster_id}: {response_content[:100]}...")
+
+                    # Handle potential markdown code blocks
+                    if response_content.startswith('```'):
+                        # Extract JSON from code block
+                        lines = response_content.split('\n')
+                        json_lines = []
+                        in_json = False
+                        for line in lines:
+                            if line.strip().startswith('```'):
+                                in_json = not in_json
+                                continue
+                            if in_json:
+                                json_lines.append(line)
+                        response_content = '\n'.join(json_lines)
+
+                    summary_data = json.loads(response_content)
 
                     cluster_data.update({
                         'theme_name': summary_data.get('theme_name', f'Cluster {cluster_id}'),
@@ -316,8 +333,9 @@ Respond as JSON with keys: theme_name, summary, severity, action_items"""
                     logger.info(f"Generated summary for cluster {cluster_id}: {cluster_data['theme_name']}")
                     time.sleep(0.5)  # Rate limiting
 
-                except (json.JSONDecodeError, KeyError) as e:
+                except (json.JSONDecodeError, KeyError, IndexError) as e:
                     logger.warning(f"Failed to parse GPT response for cluster {cluster_id}: {e}")
+                    logger.warning(f"Raw response: {response.choices[0].message.content if 'response' in locals() else 'No response'}")
                     cluster_data.update({
                         'theme_name': f'Cluster {cluster_id}',
                         'summary': 'AI summary generation failed',
@@ -362,13 +380,13 @@ Respond as JSON with keys: theme_name, summary, severity, action_items"""
             # Save cluster metadata
             for cluster_id, cluster_data in self.clusters.items():
                 cluster_record = {
-                    'cluster_id': cluster_id,
+                    'cluster_id': int(cluster_id),
                     'theme_name': cluster_data['theme_name'],
                     'summary': cluster_data['summary'],
-                    'severity': cluster_data['severity'],
+                    'severity': int(cluster_data['severity']),
                     'action_items': cluster_data['action_items'],
-                    'ticket_count': cluster_data['size'],
-                    'avg_sentiment': cluster_data['avg_sentiment'],
+                    'ticket_count': int(cluster_data['size']),
+                    'avg_sentiment': float(cluster_data['avg_sentiment']),
                     'sentiment_trend': cluster_data['sentiment_trend'],
                     'centroid_embedding': json.dumps(cluster_data['centroid']),
                     'created_at': current_time
@@ -380,8 +398,8 @@ Respond as JSON with keys: theme_name, summary, severity, action_items"""
                 assignments = []
                 for ticket in cluster_data['tickets']:
                     assignments.append({
-                        'ticket_id': ticket['id'],
-                        'cluster_id': cluster_id,
+                        'ticket_id': int(ticket['id']),
+                        'cluster_id': int(cluster_id),
                         'assigned_at': current_time
                     })
 
