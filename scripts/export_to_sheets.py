@@ -183,6 +183,90 @@ class GoogleSheetsExporter:
 
         return sum(scores) / len(scores)
 
+    def create_copy_paste_format(self, summary_data: List[Dict], cluster_data: List[Dict]) -> str:
+        """Create Google Sheets optimized copy-paste format."""
+        try:
+            lines = []
+
+            # Header
+            lines.append("KOIO CUSTOMER SUPPORT INTELLIGENCE REPORT")
+            lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
+            lines.append("")
+
+            if summary_data:
+                data = summary_data[0]
+
+                # Key Metrics Section - formatted for easy reading
+                lines.append("=== KEY METRICS ===")
+                lines.append(f"Report Period\t{data['Period_Days']} days")
+                lines.append(f"Total Tickets\t{data['Total_Tickets']}")
+                lines.append(f"Average Sentiment\t{data['Avg_Sentiment']}")
+                lines.append(f"Positive Tickets\t{data['Positive_Tickets']}")
+                lines.append(f"Neutral Tickets\t{data['Neutral_Tickets']}")
+                lines.append(f"Negative Tickets\t{data['Negative_Tickets']}")
+                lines.append(f"High Severity Issues\t{data['High_Severity_Count']}")
+                lines.append("")
+
+                # Quick Summary
+                total = data['Total_Tickets']
+                if total > 0:
+                    pos_pct = round((data['Positive_Tickets'] / total) * 100, 1)
+                    neg_pct = round((data['Negative_Tickets'] / total) * 100, 1)
+                    lines.append("=== QUICK INSIGHTS ===")
+                    lines.append(f"Customer Satisfaction\t{pos_pct}% positive, {neg_pct}% negative")
+
+                    if data['Avg_Sentiment'] > 0.2:
+                        lines.append("Overall Sentiment\tPositive trend 📈")
+                    elif data['Avg_Sentiment'] < -0.2:
+                        lines.append("Overall Sentiment\tNegative trend 📉")
+                    else:
+                        lines.append("Overall Sentiment\tNeutral/stable")
+
+                    lines.append("")
+
+            # Top Issues Section
+            if cluster_data:
+                lines.append("=== TOP SUPPORT THEMES ===")
+                lines.append("Rank\tTheme\tTickets\tSeverity\tSentiment\tSummary")
+
+                for cluster in cluster_data[:5]:
+                    summary_short = cluster['Summary'][:50] + "..." if len(cluster['Summary']) > 50 else cluster['Summary']
+                    lines.append(f"{cluster['Rank']}\t{cluster['Theme_Name']}\t{cluster['Ticket_Count']}\t{cluster['Severity']}/5\t{cluster['Sentiment_Trend']}\t{summary_short}")
+
+                lines.append("")
+
+            # Action Items
+            lines.append("=== RECOMMENDED ACTIONS ===")
+            if cluster_data:
+                high_severity = [c for c in cluster_data if c['Severity'] >= 4]
+                high_volume = [c for c in cluster_data if c['Ticket_Count'] >= 10]
+
+                if high_severity:
+                    lines.append(f"🚨 Priority 1\tAddress {len(high_severity)} high-severity issues")
+                    for cluster in high_severity[:2]:
+                        lines.append(f"  • {cluster['Theme_Name']}\t{cluster['Ticket_Count']} tickets (severity {cluster['Severity']})")
+
+                if high_volume:
+                    lines.append(f"📊 Priority 2\tOptimize {len(high_volume)} high-volume themes")
+                    for cluster in high_volume[:2]:
+                        lines.append(f"  • {cluster['Theme_Name']}\t{cluster['Ticket_Count']} tickets")
+
+                lines.append("📈 Priority 3\tMonitor sentiment trends and customer feedback")
+            else:
+                lines.append("📊 Monitor\tContinue tracking support metrics")
+
+            lines.append("")
+            lines.append("=== DATA ACCESS ===")
+            lines.append("Live Dashboard\thttps://app.supabase.com")
+            lines.append("GitHub Actions\thttps://github.com/chriskoio123/koio-pipeline/actions")
+            lines.append(f"Next Report\t{(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')}")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"Error creating copy-paste format: {e}")
+            return f"Error formatting data: {str(e)}"
+
     def create_sheets_format_data(self, summary_data: List[Dict], cluster_data: List[Dict]) -> str:
         """Create data in a format suitable for Google Sheets."""
         try:
@@ -231,20 +315,17 @@ class GoogleSheetsExporter:
             return f"Error formatting data: {str(e)}"
 
     def export_to_sheets_manually(self) -> str:
-        """Generate formatted data for manual Google Sheets entry."""
+        """Generate formatted data optimized for Google Sheets copy-paste."""
         try:
-            logger.info("Preparing data for Google Sheets export...")
-
-            if not self.test_sheets_access():
-                return "Google Sheets access test failed"
+            logger.info("Preparing data for Google Sheets copy-paste...")
 
             summary_data, cluster_data = self.prepare_metrics_data()
 
             if not summary_data:
                 return "No data available for export"
 
-            # Create formatted output
-            sheets_content = self.create_sheets_format_data(summary_data, cluster_data)
+            # Create copy-paste optimized format
+            sheets_content = self.create_copy_paste_format(summary_data, cluster_data)
 
             # Save to local file for upload
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -258,21 +339,29 @@ class GoogleSheetsExporter:
             # Create CSV for easy import
             self._create_csv_files(summary_data, cluster_data, timestamp)
 
+            # Print the formatted content directly for workflow logs
+            print("\n" + "="*80)
+            print("📋 COPY-PASTE THIS INTO YOUR GOOGLE SHEET:")
+            print("="*80)
+            print(sheets_content)
+            print("="*80)
+
             return f"""
-Google Sheets Export Complete!
+✅ GOOGLE SHEETS READY-TO-PASTE REPORT GENERATED!
 
-📊 MANUAL IMPORT INSTRUCTIONS:
-1. Open your Google Sheet: {GOOGLE_SHEETS_URL}
-2. Copy the content from: {filename}
-3. Paste into a new sheet tab named: 'Report_{datetime.now().strftime("%Y%m%d")}'
+📋 COPY-PASTE INSTRUCTIONS:
+1. The formatted report is displayed above in the workflow logs
+2. Copy the text between the === lines
+3. Open your Google Sheet: {GOOGLE_SHEETS_URL}
+4. Paste into cell A1 (it will auto-format into columns)
 
-📋 CSV FILES GENERATED:
-- summary_{timestamp}.csv
-- clusters_{timestamp}.csv
+📁 BACKUP FILES CREATED:
+- {filename} (formatted text)
+- summary_{timestamp}.csv (data table)
+- clusters_{timestamp}.csv (themes table)
 
-💡 TIP: Use Google Sheets "Import" feature to upload the CSV files directly.
-
-🔄 AUTOMATION: To enable automatic updates, add GOOGLE_API_KEY to your GitHub secrets.
+💡 PRO TIP: The text above is pre-formatted for Google Sheets -
+just copy and paste directly!
 """
 
         except Exception as e:
