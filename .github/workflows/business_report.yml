@@ -68,17 +68,23 @@ jobs:
           echo "📊 Starting business intelligence report generation..."
           python scripts/generate_business_report.py
 
-      - name: Export to Google Sheets
+      - name: Send Email Business Report
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          GOOGLE_SHEETS_URL: "https://docs.google.com/spreadsheets/d/1hr5JJbV5QbX3TYXVgtXAzwTxj1nveAawm7e4Pl7ztJg/edit?usp=sharing"
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           REPORT_ANALYSIS_DAYS: "30"
 
+          # Email Configuration
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER || 'smtp.gmail.com' }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+
         run: |
-          echo "📋 Exporting to Google Sheets..."
+          echo "📧 Sending email business intelligence report..."
           python scripts/export_to_sheets.py
 
       - name: Upload CSV Reports

@@ -2,9 +2,11 @@ import os
 import json
 import sys
 import logging
+import smtplib
+from email.mime.text import MimeText
+from email.mime.multipart import MimeMultipart
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-import requests
 
 from supabase import create_client
 from dotenv import load_dotenv
@@ -15,21 +17,13 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
 
-# Google Sheets Configuration
-GOOGLE_SHEETS_URL = os.getenv("GOOGLE_SHEETS_URL", "https://docs.google.com/spreadsheets/d/1hr5JJbV5QbX3TYXVgtXAzwTxj1nveAawm7e4Pl7ztJg/edit?usp=sharing")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-
-# Extract sheet ID from URL
-def extract_sheet_id(url: str) -> str:
-    """Extract Google Sheets ID from URL."""
-    try:
-        if "/d/" in url:
-            return url.split("/d/")[1].split("/")[0]
-        return ""
-    except:
-        return ""
-
-SHEET_ID = extract_sheet_id(GOOGLE_SHEETS_URL)
+# Email Configuration
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+EMAIL_USER = os.getenv("EMAIL_USER", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+EMAIL_TO = os.getenv("EMAIL_TO", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", EMAIL_USER)
 
 # Report Configuration
 REPORT_DAYS = int(os.getenv("REPORT_ANALYSIS_DAYS", "30"))
@@ -48,42 +42,34 @@ def die(msg: str):
 
 if not SUPABASE_URL: die("Missing SUPABASE_URL")
 if not SUPABASE_KEY: die("Missing SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)")
-if not SHEET_ID: die("Invalid GOOGLE_SHEETS_URL - could not extract sheet ID")
+if not EMAIL_TO: die("Missing EMAIL_TO - recipient email address required")
+if not EMAIL_USER: die("Missing EMAIL_USER - sender email address required")
+if not EMAIL_PASSWORD: die("Missing EMAIL_PASSWORD - email authentication required")
 
 # Initialize Supabase client
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-class GoogleSheetsExporter:
+class EmailReporter:
     def __init__(self):
-        self.sheet_id = SHEET_ID
-        self.api_key = GOOGLE_API_KEY
-        self.base_url = f"https://sheets.googleapis.com/v4/spreadsheets/{self.sheet_id}"
+        self.smtp_server = SMTP_SERVER
+        self.smtp_port = SMTP_PORT
+        self.email_user = EMAIL_USER
+        self.email_password = EMAIL_PASSWORD
+        self.email_to = EMAIL_TO
+        self.email_from = EMAIL_FROM
 
-    def test_sheets_access(self) -> bool:
-        """Test if we can access the Google Sheet."""
+    def test_email_connection(self) -> bool:
+        """Test email server connection."""
         try:
-            if self.api_key:
-                # Test with API key
-                url = f"{self.base_url}?key={self.api_key}"
-                response = requests.get(url)
-                if response.status_code == 200:
-                    logger.info("✅ Google Sheets API access confirmed")
-                    return True
-                else:
-                    logger.warning(f"Google Sheets API access failed: {response.status_code}")
-
-            # Fallback: use public access (read-only)
-            logger.info("Using public Google Sheets access")
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(self.email_user, self.email_password)
+            server.quit()
+            logger.info("✅ Email server connection successful")
             return True
-
         except Exception as e:
-            logger.error(f"Error testing Sheets access: {e}")
+            logger.error(f"❌ Email server connection failed: {e}")
             return False
-
-    def get_csv_export_url(self, sheet_name: str = "Sheet1") -> str:
-        """Generate CSV export URL for the sheet."""
-        # For public sheets, we can use the CSV export URL
-        return f"https://docs.google.com/spreadsheets/d/{self.sheet_id}/export?format=csv&gid=0"
 
     def prepare_metrics_data(self) -> List[Dict[str, Any]]:
         """Fetch and prepare metrics data for export."""
@@ -183,15 +169,144 @@ class GoogleSheetsExporter:
 
         return sum(scores) / len(scores)
 
-    def create_copy_paste_format(self, summary_data: List[Dict], cluster_data: List[Dict]) -> str:
-        """Create Google Sheets optimized copy-paste format."""
+    def create_email_html_format(self, summary_data: List[Dict], cluster_data: List[Dict]) -> str:
+        """Create HTML formatted email report."""
         try:
-            lines = []
+            if not summary_data:
+                return "<p>No data available for report generation.</p>"
 
-            # Header
-            lines.append("KOIO CUSTOMER SUPPORT INTELLIGENCE REPORT")
-            lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}")
-            lines.append("")
+            data = summary_data[0]
+
+            html = f"""
+            <html>
+            <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                    .header {{ background-color: #2c3e50; color: white; padding: 20px; text-align: center; }}
+                    .section {{ margin: 20px 0; padding: 15px; border-left: 4px solid #3498db; }}
+                    .metrics {{ background-color: #f8f9fa; padding: 15px; border-radius: 5px; }}
+                    .alert {{ background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; border-radius: 5px; }}
+                    .positive {{ color: #27ae60; font-weight: bold; }}
+                    .negative {{ color: #e74c3c; font-weight: bold; }}
+                    .neutral {{ color: #95a5a6; font-weight: bold; }}
+                    table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
+                    th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
+                    th {{ background-color: #34495e; color: white; }}
+                    .trend-up {{ color: #27ae60; }}
+                    .trend-down {{ color: #e74c3c; }}
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h1>🏢 KOIO CUSTOMER SUPPORT INTELLIGENCE</h1>
+                    <p>Weekly Business Intelligence Report</p>
+                    <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</p>
+                </div>
+
+                <div class="section">
+                    <h2>📊 Executive Summary</h2>
+                    <div class="metrics">
+                        <p><strong>Analysis Period:</strong> Last {data['Period_Days']} days</p>
+                        <p><strong>Total Support Tickets:</strong> {data['Total_Tickets']}</p>
+                        <p><strong>Customer Sentiment Score:</strong> {data['Avg_Sentiment']} (-1 to +1 scale)</p>
+                    </div>
+                </div>"""
+
+            # Sentiment Analysis
+            total = data['Total_Tickets']
+            if total > 0:
+                pos_pct = round((data['Positive_Tickets'] / total) * 100, 1)
+                neg_pct = round((data['Negative_Tickets'] / total) * 100, 1)
+                neu_pct = round((data['Neutral_Tickets'] / total) * 100, 1)
+
+                html += f"""
+                <div class="section">
+                    <h2>😊 Customer Sentiment Breakdown</h2>
+                    <p><span class="positive">{pos_pct}% Positive</span> ({data['Positive_Tickets']} tickets)</p>
+                    <p><span class="neutral">{neu_pct}% Neutral</span> ({data['Neutral_Tickets']} tickets)</p>
+                    <p><span class="negative">{neg_pct}% Negative</span> ({data['Negative_Tickets']} tickets)</p>
+
+                    {"<div class='alert'>📈 <strong>Positive Trend:</strong> Customer satisfaction is above average!</div>" if data['Avg_Sentiment'] > 0.2 else
+                     "<div class='alert'>📉 <strong>Attention Needed:</strong> Customer sentiment is declining.</div>" if data['Avg_Sentiment'] < -0.2 else
+                     "<div class='alert'>📊 <strong>Stable:</strong> Customer sentiment is neutral/stable.</div>"}
+                </div>"""
+
+            # Top Support Themes
+            if cluster_data:
+                html += """
+                <div class="section">
+                    <h2>🎯 Top Support Themes</h2>
+                    <table>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Theme</th>
+                            <th>Tickets</th>
+                            <th>Severity</th>
+                            <th>Trend</th>
+                            <th>Summary</th>
+                        </tr>"""
+
+                for cluster in cluster_data[:5]:
+                    severity_color = "#e74c3c" if cluster['Severity'] >= 4 else "#f39c12" if cluster['Severity'] >= 3 else "#27ae60"
+                    html += f"""
+                        <tr>
+                            <td><strong>{cluster['Rank']}</strong></td>
+                            <td>{cluster['Theme_Name']}</td>
+                            <td>{cluster['Ticket_Count']}</td>
+                            <td style="color: {severity_color};">{cluster['Severity']}/5</td>
+                            <td>{cluster['Sentiment_Trend']}</td>
+                            <td>{cluster['Summary'][:100]}{'...' if len(cluster['Summary']) > 100 else ''}</td>
+                        </tr>"""
+
+                html += "</table></div>"
+
+            # Action Items
+            html += """
+                <div class="section">
+                    <h2>🎯 Recommended Actions</h2>"""
+
+            if cluster_data:
+                high_severity = [c for c in cluster_data if c['Severity'] >= 4]
+                high_volume = [c for c in cluster_data if c['Ticket_Count'] >= 10]
+
+                if high_severity:
+                    html += f"<p><strong>🚨 Priority 1:</strong> Address {len(high_severity)} high-severity issues</p><ul>"
+                    for cluster in high_severity[:2]:
+                        html += f"<li>{cluster['Theme_Name']} - {cluster['Ticket_Count']} tickets (severity {cluster['Severity']})</li>"
+                    html += "</ul>"
+
+                if high_volume:
+                    html += f"<p><strong>📊 Priority 2:</strong> Optimize {len(high_volume)} high-volume themes</p><ul>"
+                    for cluster in high_volume[:2]:
+                        html += f"<li>{cluster['Theme_Name']} - {cluster['Ticket_Count']} tickets</li>"
+                    html += "</ul>"
+
+                html += "<p><strong>📈 Priority 3:</strong> Continue monitoring sentiment trends and customer feedback</p>"
+            else:
+                html += "<p>📊 Continue monitoring support metrics and customer satisfaction</p>"
+
+            html += """
+                </div>
+
+                <div class="section">
+                    <h2>🔗 Quick Links</h2>
+                    <p>📊 <a href="https://app.supabase.com">Live Dashboard</a></p>
+                    <p>🔄 <a href="https://github.com/chriskoio123/koio-pipeline/actions">Automation Status</a></p>
+                    <p>📅 Next Report: {next_report}</p>
+                </div>
+
+                <div style="margin-top: 30px; padding: 15px; background-color: #ecf0f1; text-align: center; font-size: 12px; color: #7f8c8d;">
+                    <p>🤖 This report was automatically generated by the KOIO Support Intelligence Pipeline</p>
+                    <p>For questions or support, contact your development team</p>
+                </div>
+            </body>
+            </html>""".format(next_report=(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d'))
+
+            return html
+
+        except Exception as e:
+            logger.error(f"Error creating email HTML format: {e}")
+            return f"<p>Error formatting report: {str(e)}</p>"
 
             if summary_data:
                 data = summary_data[0]
@@ -314,59 +429,88 @@ class GoogleSheetsExporter:
             logger.error(f"Error creating sheets format: {e}")
             return f"Error formatting data: {str(e)}"
 
-    def export_to_sheets_manually(self) -> str:
-        """Generate formatted data optimized for Google Sheets copy-paste."""
+    def send_email_report(self, html_content: str, subject: str) -> bool:
+        """Send HTML email report."""
         try:
-            logger.info("Preparing data for Google Sheets copy-paste...")
+            msg = MimeMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = self.email_from
+            msg['To'] = self.email_to
+
+            # Create HTML part
+            html_part = MimeText(html_content, 'html')
+            msg.attach(html_part)
+
+            # Send email
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(self.email_user, self.email_password)
+            text = msg.as_string()
+            server.sendmail(self.email_from, [self.email_to], text)
+            server.quit()
+
+            logger.info(f"✅ Email report sent successfully to {self.email_to}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to send email: {e}")
+            return False
+
+    def generate_and_send_report(self) -> str:
+        """Generate and send HTML email report."""
+        try:
+            logger.info("📧 Generating email business intelligence report...")
+
+            # Test email connection first
+            if not self.test_email_connection():
+                return "❌ Email connection failed - check email configuration"
 
             summary_data, cluster_data = self.prepare_metrics_data()
 
             if not summary_data:
-                return "No data available for export"
+                return "❌ No data available for report generation"
 
-            # Create copy-paste optimized format
-            sheets_content = self.create_copy_paste_format(summary_data, cluster_data)
+            # Generate HTML content
+            html_content = self.create_email_html_format(summary_data, cluster_data)
 
-            # Save to local file for upload
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"koio_support_report_{timestamp}.txt"
+            # Create email subject
+            report_date = datetime.now().strftime('%Y-%m-%d')
+            total_tickets = summary_data[0]['Total_Tickets'] if summary_data else 0
+            subject = f"📊 KOIO Support Intelligence Report - {report_date} ({total_tickets} tickets)"
 
-            with open(filename, 'w') as f:
-                f.write(sheets_content)
+            # Send email
+            if self.send_email_report(html_content, subject):
+                # Save backup files
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                self._create_csv_files(summary_data, cluster_data, timestamp)
 
-            logger.info(f"Report saved to {filename}")
+                return f"""
+✅ EMAIL REPORT SENT SUCCESSFULLY!
 
-            # Create CSV for easy import
-            self._create_csv_files(summary_data, cluster_data, timestamp)
-
-            # Print the formatted content directly for workflow logs
-            print("\n" + "="*80)
-            print("📋 COPY-PASTE THIS INTO YOUR GOOGLE SHEET:")
-            print("="*80)
-            print(sheets_content)
-            print("="*80)
-
-            return f"""
-✅ GOOGLE SHEETS READY-TO-PASTE REPORT GENERATED!
-
-📋 COPY-PASTE INSTRUCTIONS:
-1. The formatted report is displayed above in the workflow logs
-2. Copy the text between the === lines
-3. Open your Google Sheet: {GOOGLE_SHEETS_URL}
-4. Paste into cell A1 (it will auto-format into columns)
+📧 EMAIL DETAILS:
+- To: {self.email_to}
+- Subject: {subject}
+- Content: Professional HTML business intelligence report
+- Date: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
 
 📁 BACKUP FILES CREATED:
-- {filename} (formatted text)
-- summary_{timestamp}.csv (data table)
-- clusters_{timestamp}.csv (themes table)
+- summary_{timestamp}.csv (summary data)
+- clusters_{timestamp}.csv (cluster analysis)
 
-💡 PRO TIP: The text above is pre-formatted for Google Sheets -
-just copy and paste directly!
+📊 REPORT SUMMARY:
+- Analysis Period: {summary_data[0]['Period_Days']} days
+- Total Tickets: {summary_data[0]['Total_Tickets']}
+- Sentiment Score: {summary_data[0]['Avg_Sentiment']}
+- Active Clusters: {len(cluster_data)}
+
+💡 Check your email inbox for the detailed HTML report!
 """
+            else:
+                return "❌ Failed to send email report - check logs for details"
 
         except Exception as e:
-            logger.error(f"Error in sheets export: {e}")
-            return f"Sheets export failed: {str(e)}"
+            logger.error(f"Error generating email report: {e}")
+            return f"❌ Email report generation failed: {str(e)}"
 
     def _create_csv_files(self, summary_data: List[Dict], cluster_data: List[Dict], timestamp: str):
         """Create CSV files for easy Google Sheets import."""
@@ -393,13 +537,13 @@ just copy and paste directly!
             logger.error(f"Error creating CSV files: {e}")
 
 def main():
-    logger.info("=== Koio Google Sheets Export Starting ===")
+    logger.info("=== KOIO Email Business Intelligence Report Starting ===")
 
-    exporter = GoogleSheetsExporter()
-    result = exporter.export_to_sheets_manually()
+    reporter = EmailReporter()
+    result = reporter.generate_and_send_report()
 
     print("\n" + "="*60)
-    print("GOOGLE SHEETS EXPORT REPORT")
+    print("EMAIL BUSINESS INTELLIGENCE REPORT")
     print("="*60)
     print(result)
     print("="*60)
