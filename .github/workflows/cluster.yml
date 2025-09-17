@@ -26,10 +26,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pandas
 
       - name: Verify clustering dependencies
         run: |
-          python -c "import numpy, sklearn, hdbscan; print('✅ Clustering dependencies OK')"
+          python -c "import numpy, sklearn, hdbscan, pandas; print('✅ Clustering dependencies OK')"
           python -c "import openai; print('✅ OpenAI client OK')"
           python -c "from supabase import create_client; print('✅ Supabase client OK')"
 
