@@ -209,7 +209,7 @@ class MonitoringSystem:
             return None
 
         except Exception as e:
-            logger.error(f"Error checking high severity clusters: {e}")
+            logger.warning(f"Could not check high severity clusters (table may not exist yet): {e}")
             return None
 
     def check_cluster_volume_spikes(self) -> List[Alert]:
@@ -246,7 +246,7 @@ class MonitoringSystem:
                     ))
 
         except Exception as e:
-            logger.error(f"Error checking cluster volumes: {e}")
+            logger.warning(f"Could not check cluster volumes (table may not exist yet): {e}")
 
         return alerts
 
@@ -390,6 +390,14 @@ No significant alerts detected in customer support metrics.
 
 def main():
     logger.info("=== Koio Support Monitoring Starting ===")
+
+    # Test database connectivity
+    try:
+        test_query = sb.table("raw_gorgias").select("id", count="exact").limit(1).execute()
+        logger.info(f"✅ Database connectivity OK (found {test_query.count or 0} tickets)")
+    except Exception as e:
+        logger.error(f"❌ Database connectivity failed: {e}")
+        sys.exit(1)
 
     monitor = MonitoringSystem()
     report = monitor.run_monitoring_checks()
