@@ -3,8 +3,8 @@ import json
 import sys
 import logging
 import smtplib
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
+import email.mime.text
+import email.mime.multipart
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -432,13 +432,13 @@ class EmailReporter:
     def send_email_report(self, html_content: str, subject: str) -> bool:
         """Send HTML email report."""
         try:
-            msg = MimeMultipart('alternative')
+            msg = email.mime.multipart.MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = self.email_from
             msg['To'] = self.email_to
 
             # Create HTML part
-            html_part = MimeText(html_content, 'html')
+            html_part = email.mime.text.MIMEText(html_content, 'html')
             msg.attach(html_part)
 
             # Send email
