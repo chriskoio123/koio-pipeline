@@ -18,12 +18,31 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
 
 # Email Configuration
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_SERVER = os.getenv("SMTP_SERVER", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 EMAIL_USER = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_TO = os.getenv("EMAIL_TO", "")
 EMAIL_FROM = os.getenv("EMAIL_FROM", EMAIL_USER)
+
+# Auto-detect SMTP server based on email domain
+if not SMTP_SERVER and EMAIL_USER:
+    domain = EMAIL_USER.split('@')[1].lower()
+    if 'koio.co' in domain:
+        # Try common business email SMTP servers
+        SMTP_SERVERS_TO_TRY = [
+            'mail.koio.co',
+            'smtp.koio.co',
+            'smtp.gmail.com',  # If using Google Workspace
+            'smtp.office365.com'  # If using Office 365
+        ]
+        SMTP_SERVER = SMTP_SERVERS_TO_TRY[0]  # Start with the first one
+    elif 'gmail.com' in domain:
+        SMTP_SERVER = 'smtp.gmail.com'
+    elif 'outlook.com' in domain or 'hotmail.com' in domain:
+        SMTP_SERVER = 'smtp.outlook.com'
+    else:
+        SMTP_SERVER = 'smtp.gmail.com'  # Default fallback
 
 # Report Configuration
 REPORT_DAYS = int(os.getenv("REPORT_ANALYSIS_DAYS", "30"))
@@ -59,31 +78,50 @@ class EmailReporter:
         self.email_from = EMAIL_FROM
 
     def test_email_connection(self) -> bool:
-        """Test email server connection."""
-        try:
-            logger.info(f"Testing email connection to {self.smtp_server}:{self.smtp_port}")
-            logger.info(f"Email user: {self.email_user}")
-            logger.info(f"Email to: {self.email_to}")
+        """Test email server connection, trying multiple SMTP servers for business email."""
+        domain = self.email_user.split('@')[1].lower()
 
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            logger.info("✅ SMTP connection established")
+        # Define servers to try for koio.co
+        if 'koio.co' in domain:
+            servers_to_try = [
+                ('mail.koio.co', 587),
+                ('smtp.koio.co', 587),
+                ('smtp.gmail.com', 587),  # Google Workspace
+                ('smtp.office365.com', 587),  # Office 365
+                ('mail.koio.co', 25),  # Alternative port
+                ('smtp.koio.co', 25)
+            ]
+        else:
+            servers_to_try = [(self.smtp_server, self.smtp_port)]
 
-            server.starttls()
-            logger.info("✅ TLS encryption enabled")
+        for smtp_server, smtp_port in servers_to_try:
+            try:
+                logger.info(f"🔍 Testing {smtp_server}:{smtp_port}")
 
-            server.login(self.email_user, self.email_password)
-            logger.info("✅ Email authentication successful")
+                server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
+                logger.info(f"✅ SMTP connection to {smtp_server} established")
 
-            server.quit()
-            logger.info("✅ Email server connection test completed successfully")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Email server connection failed: {e}")
-            logger.error(f"SMTP Server: {self.smtp_server}:{self.smtp_port}")
-            logger.error(f"Email User: {self.email_user}")
-            import traceback
-            logger.error(f"Full error: {traceback.format_exc()}")
-            return False
+                server.starttls()
+                logger.info("✅ TLS encryption enabled")
+
+                server.login(self.email_user, self.email_password)
+                logger.info("✅ Email authentication successful")
+
+                server.quit()
+
+                # Update the working server
+                self.smtp_server = smtp_server
+                self.smtp_port = smtp_port
+
+                logger.info(f"✅ Found working SMTP server: {smtp_server}:{smtp_port}")
+                return True
+
+            except Exception as e:
+                logger.warning(f"❌ {smtp_server}:{smtp_port} failed: {e}")
+                continue
+
+        logger.error(f"❌ All SMTP servers failed for {self.email_user}")
+        return False
 
     def prepare_metrics_data(self) -> List[Dict[str, Any]]:
         """Fetch and prepare metrics data for export."""
@@ -462,12 +500,21 @@ class EmailReporter:
             # Send email
             logger.info(f"📡 Connecting to SMTP server {self.smtp_server}:{self.smtp_port}")
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.set_debuglevel(1)  # Enable SMTP debugging
 
             logger.info("🔐 Starting TLS encryption")
             server.starttls()
 
             logger.info(f"🔑 Authenticating as {self.email_user}")
-            server.login(self.email_user, self.email_password)
+            # Try different authentication approaches
+            try:
+                server.login(self.email_user, self.email_password)
+            except smtplib.SMTPAuthenticationError as e:
+                logger.warning(f"Standard auth failed, trying alternative approaches: {e}")
+                # Try without TLS for some providers
+                server.quit()
+                server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+                server.login(self.email_user, self.email_password)
 
             logger.info(f"📤 Sending email from {self.email_from} to {self.email_to}")
             text = msg.as_string()
