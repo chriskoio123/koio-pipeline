@@ -420,12 +420,15 @@ def main():
     print(report)
     print("="*60)
 
-    # Exit with error code if critical alerts found
+    # Report critical alerts but don't exit with error (let workflow handle notification)
     critical_count = len([a for a in monitor.alerts if a.level == "critical"])
     if critical_count > 0:
-        logger.warning(f"Exiting with error code due to {critical_count} critical alerts")
-        sys.exit(1)
+        logger.warning(f"Found {critical_count} critical alerts - check GitHub issues for notifications")
+        # Create a flag file to indicate critical alerts were found
+        with open("critical_alerts_detected.flag", "w") as f:
+            f.write(f"{critical_count}")
 
+    logger.info("✅ Monitoring completed successfully")
     return True
 
 if __name__ == "__main__":

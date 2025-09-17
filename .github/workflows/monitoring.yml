@@ -49,8 +49,18 @@ jobs:
           echo "🔍 Running support monitoring checks..."
           python scripts/monitoring_alerts.py
 
+      - name: Check for Critical Alerts
+        id: check_alerts
+        run: |
+          if [ -f "critical_alerts_detected.flag" ]; then
+            echo "critical_alerts=true" >> $GITHUB_OUTPUT
+            echo "alert_count=$(cat critical_alerts_detected.flag)" >> $GITHUB_OUTPUT
+          else
+            echo "critical_alerts=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create Critical Alert Issue
-        if: failure()  # Only runs if monitoring script exits with error (critical alerts)
+        if: steps.check_alerts.outputs.critical_alerts == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
