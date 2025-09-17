@@ -61,14 +61,28 @@ class EmailReporter:
     def test_email_connection(self) -> bool:
         """Test email server connection."""
         try:
+            logger.info(f"Testing email connection to {self.smtp_server}:{self.smtp_port}")
+            logger.info(f"Email user: {self.email_user}")
+            logger.info(f"Email to: {self.email_to}")
+
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            logger.info("✅ SMTP connection established")
+
             server.starttls()
+            logger.info("✅ TLS encryption enabled")
+
             server.login(self.email_user, self.email_password)
+            logger.info("✅ Email authentication successful")
+
             server.quit()
-            logger.info("✅ Email server connection successful")
+            logger.info("✅ Email server connection test completed successfully")
             return True
         except Exception as e:
             logger.error(f"❌ Email server connection failed: {e}")
+            logger.error(f"SMTP Server: {self.smtp_server}:{self.smtp_port}")
+            logger.error(f"Email User: {self.email_user}")
+            import traceback
+            logger.error(f"Full error: {traceback.format_exc()}")
             return False
 
     def prepare_metrics_data(self) -> List[Dict[str, Any]]:
@@ -432,28 +446,41 @@ class EmailReporter:
     def send_email_report(self, html_content: str, subject: str) -> bool:
         """Send HTML email report."""
         try:
+            logger.info(f"📧 Preparing email: {subject}")
+
             msg = email.mime.multipart.MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = self.email_from
             msg['To'] = self.email_to
+            logger.info("✅ Email message created")
 
             # Create HTML part
             html_part = email.mime.text.MIMEText(html_content, 'html')
             msg.attach(html_part)
+            logger.info("✅ HTML content attached")
 
             # Send email
+            logger.info(f"📡 Connecting to SMTP server {self.smtp_server}:{self.smtp_port}")
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+
+            logger.info("🔐 Starting TLS encryption")
             server.starttls()
+
+            logger.info(f"🔑 Authenticating as {self.email_user}")
             server.login(self.email_user, self.email_password)
+
+            logger.info(f"📤 Sending email from {self.email_from} to {self.email_to}")
             text = msg.as_string()
             server.sendmail(self.email_from, [self.email_to], text)
-            server.quit()
 
+            server.quit()
             logger.info(f"✅ Email report sent successfully to {self.email_to}")
             return True
 
         except Exception as e:
             logger.error(f"❌ Failed to send email: {e}")
+            import traceback
+            logger.error(f"Full error trace: {traceback.format_exc()}")
             return False
 
     def generate_and_send_report(self) -> str:
