@@ -399,6 +399,17 @@ def main():
         logger.error(f"❌ Database connectivity failed: {e}")
         sys.exit(1)
 
+    # Check if clustering data is available (should run after clustering at 11:00 UTC)
+    try:
+        cluster_query = sb.table("ticket_clusters").select("id", count="exact").limit(1).execute()
+        cluster_count = cluster_query.count or 0
+        if cluster_count == 0:
+            logger.warning("⚠️ No clustering data found - monitoring may be running before clustering analysis")
+        else:
+            logger.info(f"✅ Clustering data available ({cluster_count} clusters found)")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not check clustering data: {e}")
+
     monitor = MonitoringSystem()
     report = monitor.run_monitoring_checks()
 
