@@ -1,8 +1,8 @@
 name: Support Monitoring & Alerts
 
 on:
-  schedule:
-    - cron: "0 12 * * *"  # Daily at 12:00 UTC (after clustering at 11:00)
+  # schedule:
+  #   - cron: "0 12 * * *"  # Daily at 12:00 UTC (after clustering at 11:00)
   workflow_dispatch: {}    # Manual trigger
 
 concurrency:

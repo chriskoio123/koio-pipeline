@@ -1,8 +1,8 @@
 name: Weekly Business Intelligence Report
 
 on:
-  schedule:
-    - cron: "0 14 * * 1"  # Every Monday at 2 PM UTC
+  # schedule:
+  #   - cron: "0 14 * * 1"  # Every Monday at 2 PM UTC
   workflow_dispatch: {}   # Manual trigger
 
 concurrency:
